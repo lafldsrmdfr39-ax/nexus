@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XelCore • Mark VIII — Celestial Pivot</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        :root { --cyan: #00f3ff; --red: #ff3c00; --bg: #010103; }
+        body { margin: 0; overflow: hidden; background: var(--bg); font-family: 'Segoe UI', sans-serif; cursor: none; }
+        
+        #hud-header {
+            position: absolute; top: 0; width: 100%; padding: 25px 45px;
+            display: flex; justify-content: space-between; color: var(--cyan); 
+            z-index: 10; pointer-events: none; box-sizing: border-box;
+            text-transform: uppercase; letter-spacing: 3px;
+        }
+
+        .status-box { border-left: 3px solid var(--cyan); padding-left: 15px; background: rgba(0, 243, 255, 0.03); }
+        .status-box h1 { margin: 0; font-size: 1.4rem; font-weight: 900; }
+
+        #cursor {
+            position: absolute; width: 35px; height: 35px;
+            border: 2px solid var(--cyan); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 100;
+            transition: border-color 0.1s, transform 0.1s, background 0.2s;
+            box-shadow: 0 0 15px var(--cyan);
+        }
+        #cursor.fist { border-color: var(--red); background: rgba(255, 60, 0, 0.2); transform: translate(-50%, -50%) scale(0.8); box-shadow: 0 0 20px var(--red); }
+
+        #volume-meter {
+            position: absolute; right: 40px; top: 50%; transform: translateY(-50%);
+            width: 6px; height: 300px; background: rgba(255,255,255,0.05); border-radius: 3px;
+        }
+        #volume-fill {
+            position: absolute; bottom: 0; width: 100%; background: var(--cyan);
+            height: 50%; border-radius: 3px; box-shadow: 0 0 15px var(--cyan);
+            transition: height 0.1s ease-out;
+        }
+
+        video { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="hud-header">
+    <div class="status-box">
+        <h1>XELCORE MK-VIII</h1>
+        <p>ORBITAL SYSTEM: STABILIZED | AXIS LOCK</p>
+    </div>
+    <div style="text-align: right;">
+        <p>ZOOM LENS: <span id="zoom-val">1.0</span>x</p>
+        <p>PITCH LIMIT: <span id="vel-val">±35°</span></p>
+    </div>
+</div>
+
+<div id="cursor"></div>
+<div id="volume-meter"><div id="volume-fill"></div></div>
+
+<video id="input_video"></video>
+<canvas id="three-canvas"></canvas>
+
+<script>
+    /** XELCORE MK-VIII: SISTEMA SOLAR TÁCTICO - ESTABILIZACIÓN DE EJES **/
+    
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('three-canvas'), antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const links = [
+        { id: 'YOUTUBE', url: 'https://www.youtube.com' },
+        { id: 'SIE IEST', url: 'https://sie.iest.edu.mx' },
+        { id: 'NOTION', url: 'https://www.notion.so' },
+        { id: 'X / TWITTER', url: 'https://x.com' },
+        { id: 'WIKIPEDIA', url: 'https://www.wikipedia.org' },
+        { id: 'AMAZON', url: 'https://www.amazon.com' }
+    ];
+
+    const systemOrbitGroup = new THREE.Group();
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    function createIntegratedTexture(text, isHover = false) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 512; canvas.height = 256;
+        
+        ctx.fillStyle = isHover ? 'rgba(0, 243, 255, 0.45)' : 'rgba(0, 243, 255, 0.12)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.strokeStyle = isHover ? '#ffffff' : '#00f3ff';
+        ctx.lineWidth = 15;
+        ctx.strokeRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.shadowColor = 'rgba(0, 243, 255, 1)';
+        ctx.shadowBlur = isHover ? 25 : 5;
+        ctx.fillStyle = isHover ? '#ffffff' : '#00f3ff';
+        ctx.font = '900 85px Segoe UI, Tahoma, sans-serif'; 
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        return texture;
+    }
+
+    const sunGeo = new THREE.IcosahedronGeometry(6, 2);
+    const sunMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true, transparent: true, opacity: 0.6 });
+    const sun = new THREE.Mesh(sunGeo, sunMat);
+    scene.add(sun);
+
+    links.forEach((link, i) => {
+        const geometry = new THREE.PlaneGeometry(16, 9);
+        const material = new THREE.MeshBasicMaterial({ 
+            map: createIntegratedTexture(link.id),
+            transparent: true, 
+            opacity: 0.85,
+            side: THREE.DoubleSide 
+        });
+        
+        const mesh = new THREE.Mesh(geometry, material);
+        const angle = (i / links.length) * Math.PI * 2;
+        const radius = 50;
+        mesh.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+        mesh.lookAt(0, 0, 0);
+        
+        mesh.userData = { 
+            id: link.id, 
+            url: link.url, 
+            texDefault: createIntegratedTexture(link.id, false),
+            texHover: createIntegratedTexture(link.id, true),
+            isHovered: false
+        };
+
+        const orbitPathGeo = new THREE.RingGeometry(radius - 0.2, radius + 0.2, 64);
+        const orbitPathMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, transparent: true, opacity: 0.1, side: THREE.DoubleSide });
+        const orbitRing = new THREE.Mesh(orbitPathGeo, orbitPathMat);
+        orbitRing.rotation.x = Math.PI / 2;
+        scene.add(orbitRing);
+
+        systemOrbitGroup.add(mesh);
+    });
+    scene.add(systemOrbitGroup);
+
+    const starGeo = new THREE.BufferGeometry();
+    const starPoints = [];
+    for(let i=0; i<5000; i++) {
+        starPoints.push((Math.random()-0.5)*400, (Math.random()-0.5)*400, (Math.random()-0.5)*400);
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(starPoints), 3));
+    const starMat = new THREE.PointsMaterial({ color: 0x00f3ff, size: 0.1, transparent: true, opacity: 0.3 });
+    scene.add(new THREE.Points(starGeo, starMat));
+
+    camera.position.z = 80;
+
+    const videoElement = document.getElementById('input_video');
+    const cursorEl = document.getElementById('cursor');
+    const volumeFill = document.getElementById('volume-fill');
+    const zoomText = document.getElementById('zoom-val');
+
+    let handData = { x: 0, y: 0, z: 80, isFist: false, active: false };
+    let smoothHand = { x: 0, y: 0, z: 80 };
+    let orbitalSpeedX = 0;
+    let orbitalSpeedY = 0;
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+
+    hands.onResults((results) => {
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            handData.active = true;
+            const hand = results.multiHandLandmarks[0];
+            handData.x = (1 - hand[9].x) * window.innerWidth;
+            handData.y = hand[9].y * window.innerHeight;
+
+            // ROTACIÓN INVERTIDA (Horizontal)
+            const offCenterX = (hand[9].x - 0.5) * 2; 
+            orbitalSpeedY = offCenterX * 0.04; 
+
+            // ROTACIÓN INSTINTIVA SUTIL (Vertical)
+            const offCenterY = (hand[9].y - 0.5) * 2;
+            orbitalSpeedX = offCenterY * 0.012; // Reducido para mayor sutileza
+
+            // ZOOM RE-CALIBRADO: 2.0x HUD = 1.3x Visual
+            const volume = Math.hypot(hand[0].x - hand[9].x, hand[0].y - hand[9].y);
+            handData.z = THREE.MathUtils.mapLinear(volume, 0.08, 0.35, 80, 61.5);
+            handData.z = THREE.MathUtils.clamp(handData.z, 61.5, 80);
+
+            const tips = [hand[8], hand[12], hand[16], hand[20]];
+            const dist = tips.reduce((acc, tip) => acc + Math.hypot(tip.x - hand[0].x, tip.y - hand[0].y), 0) / 4;
+            handData.isFist = dist < 0.22;
+        } else {
+            handData.active = false;
+            orbitalSpeedX *= 0.92; orbitalSpeedY *= 0.92;
+        }
+    });
+
+    const camUtils = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 640, height: 480
+    });
+    camUtils.start();
+
+    let lastFistState = false;
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Aplicar Rotación con Bloqueo de Seguridad (Clamp)
+        systemOrbitGroup.rotation.y += orbitalSpeedY;
+        
+        // Bloqueo de inclinación vertical a ±0.6 radianes (aprox ±35 grados)
+        let nextRotX = systemOrbitGroup.rotation.x + orbitalSpeedX;
+        systemOrbitGroup.rotation.x = THREE.MathUtils.clamp(nextRotX, -0.6, 0.6);
+
+        if (handData.active) {
+            smoothHand.x += (handData.x - smoothHand.x) * 0.15;
+            smoothHand.y += (handData.y - smoothHand.y) * 0.15;
+            smoothHand.z += (handData.z - smoothHand.z) * 0.08;
+
+            cursorEl.style.left = `${smoothHand.x}px`;
+            cursorEl.style.top = `${smoothHand.y}px`;
+            cursorEl.className = handData.isFist ? 'fist' : '';
+            
+            const zoomPerc = THREE.MathUtils.mapLinear(smoothHand.z, 80, 61.5, 0, 100);
+            volumeFill.style.height = `${zoomPerc}%`;
+            zoomText.innerText = (1 + (zoomPerc/100)).toFixed(1);
+
+            camera.position.z = smoothHand.z;
+
+            mouse.x = (smoothHand.x / window.innerWidth) * 2 - 1;
+            mouse.y = -(smoothHand.y / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = raycaster.intersectObjects(systemOrbitGroup.children);
+            systemOrbitGroup.children.forEach(p => {
+                if(p.userData.isHovered) {
+                    p.material.map = p.userData.texDefault;
+                    p.userData.isHovered = false;
+                }
+            });
+
+            if (intersects.length > 0) {
+                const target = intersects[0].object;
+                if(!target.userData.isHovered) {
+                    target.material.map = target.userData.texHover;
+                    target.userData.isHovered = true;
+                }
+                if (handData.isFist && !lastFistState) {
+                    window.open(target.userData.url, '_blank');
+                    lastFistState = true;
+                }
+            }
+            if (!handData.isFist) lastFistState = false;
+        }
+
+        sun.rotation.y += 0.01;
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+</script>
+</body>
+</html>

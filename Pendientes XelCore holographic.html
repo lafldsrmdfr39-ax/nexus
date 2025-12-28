@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XelCore • Mark X — Task Nexus (Dopamine Edition)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        :root { 
+            --cyan: #00f3ff; 
+            --red: #ff3c00; 
+            --bg: #020205; 
+            --glass: rgba(0, 243, 255, 0.05);
+            --glass-bright: rgba(0, 243, 255, 0.15);
+            --gold: #ffd700;
+        }
+        
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: var(--bg); 
+            font-family: 'Segoe UI', Roboto, sans-serif; 
+            cursor: none; 
+            color: white; 
+        }
+
+        /* HUD Superior */
+        #hud-header {
+            position: absolute; top: 0; width: 100%; padding: 30px 50px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            z-index: 10; pointer-events: none; box-sizing: border-box;
+        }
+
+        .status-module { border-left: 3px solid var(--cyan); padding-left: 20px; text-transform: uppercase; letter-spacing: 2px; }
+        .status-module h1 { margin: 0; font-size: 1.5rem; font-weight: 900; color: var(--cyan); }
+        .status-module p { margin: 5px 0 0; font-size: 0.7rem; opacity: 0.7; }
+
+        /* Contenedor Principal de Tareas */
+        #nexus-container {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -45%);
+            width: 90%; max-width: 800px; height: 60vh;
+            display: flex; flex-direction: column; gap: 15px;
+            z-index: 5;
+        }
+
+        /* Entrada de Nueva Tarea */
+        #input-module {
+            display: flex; gap: 10px; margin-bottom: 20px;
+        }
+        #task-input {
+            flex: 1; background: rgba(0,0,0,0.6); border: 1px solid var(--cyan);
+            padding: 15px 20px; color: var(--cyan); font-size: 1.1rem;
+            outline: none; transition: box-shadow 0.3s;
+        }
+        #task-input:focus { box-shadow: 0 0 15px var(--cyan); }
+        
+        .add-btn {
+            padding: 0 30px; border: 1px solid var(--cyan); background: var(--glass);
+            color: var(--cyan); font-weight: 900; cursor: pointer; text-transform: uppercase;
+        }
+
+        /* Lista de Tareas */
+        #task-list {
+            flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+            padding-right: 10px; scrollbar-width: thin; scrollbar-color: var(--cyan) transparent;
+        }
+
+        .task-item {
+            background: var(--glass); border: 1px solid rgba(0, 243, 255, 0.2);
+            padding: 20px; display: flex; align-items: center; justify-content: space-between;
+            transition: all 0.2s; position: relative; overflow: hidden;
+        }
+        .task-item.hovered { border-color: var(--cyan); background: var(--glass-bright); transform: scale(1.02); }
+        .task-item.completed { border-color: #444; opacity: 0.5; }
+        .task-item.completed .task-text { text-decoration: line-through; color: #888; }
+
+        .task-text { font-size: 1.2rem; font-weight: 500; letter-spacing: 1px; }
+        
+        .task-actions { display: flex; gap: 10px; }
+        .action-box { 
+            width: 40px; height: 40px; border: 1px solid var(--cyan); 
+            display: flex; align-items: center; justify-content: center; font-size: 0.8rem;
+        }
+        .action-box.check { color: var(--cyan); }
+        .action-box.delete { border-color: var(--red); color: var(--red); }
+
+        /* Retícula Neural */
+        #reticle {
+            position: absolute; width: 35px; height: 35px;
+            border: 2px solid var(--cyan); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 100;
+            box-shadow: 0 0 15px var(--cyan);
+            transition: width 0.2s, height 0.2s, background 0.2s;
+        }
+        #reticle.fist { border-color: var(--red); background: rgba(255, 60, 0, 0.2); width: 50px; height: 50px; box-shadow: 0 0 25px var(--red); }
+
+        /* Estadísticas */
+        #stats-panel {
+            position: absolute; bottom: 40px; right: 50px;
+            text-align: right; color: var(--cyan); font-family: monospace;
+        }
+
+        /* DOPAMINE EFFECTS */
+        #dopamine-canvas {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 99;
+        }
+
+        #victory-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 243, 255, 0.1);
+            backdrop-filter: blur(10px);
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 200; pointer-events: none;
+            text-transform: uppercase; letter-spacing: 5px;
+            animation: fadeIn 0.5s forwards;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .victory-text { font-size: 3rem; font-weight: 900; color: var(--cyan); text-shadow: 0 0 30px var(--cyan); }
+
+        video { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="hud-header">
+    <div class="status-module">
+        <h1>TASK NEXUS MK-X</h1>
+        <p>OPERADOR: SR. AXEL | PRIORIDAD ALPHA</p>
+    </div>
+    <div style="text-align: right; color: var(--cyan);">
+        <p id="clock">00:00:00</p>
+        <p>NEURAL LINK: <span id="link-status" style="color: var(--red);">OFFLINE</span></p>
+    </div>
+</div>
+
+<div id="reticle"></div>
+<canvas id="dopamine-canvas"></canvas>
+
+<div id="victory-overlay">
+    <div class="victory-text">MISSION COMPLETE</div>
+    <div style="color: white; margin-top: 10px;">EFICIENCIA MÁXIMA LOGRADA</div>
+</div>
+
+<div id="nexus-container">
+    <div id="input-module">
+        <input type="text" id="task-input" placeholder="DEFINIR NUEVO OBJETIVO..." autocomplete="off">
+        <button class="add-btn" id="add-task-trigger">AÑADIR</button>
+    </div>
+    <div id="task-list">
+        <!-- Las tareas se inyectan aquí -->
+    </div>
+</div>
+
+<div id="stats-panel">
+    EFICIENCIA DEL SISTEMA: <span id="efficiency">0%</span><br>
+    OBJETIVOS COMPLETADOS: <span id="completed-count">0</span>/<span id="total-count">0</span>
+</div>
+
+<video id="input_video"></video>
+
+<script>
+    /** XELCORE MARK X: TASK NEXUS CORE LOGIC **/
+    
+    // Actualización de objetivos por petición del Sr. Axel (Acomodando mentes inferiores)
+    let tasks = JSON.parse(localStorage.getItem('xelcore_tasks')) || [
+        { id: 1, text: "LEER 10 PAGINAS DEL LIBRO", completed: false },
+        { id: 2, text: "MEJORAR AL PROGRAMAR", completed: false },
+        { id: 3, text: "APRENDER ALGO NUEVO", completed: false }
+    ];
+
+    const taskList = document.getElementById('task-list');
+    const taskInput = document.getElementById('task-input');
+    const reticle = document.getElementById('reticle');
+    const videoElement = document.getElementById('input_video');
+    const dopCanvas = document.getElementById('dopamine-canvas');
+    const dopCtx = dopCanvas.getContext('2d');
+    const victoryOverlay = document.getElementById('victory-overlay');
+
+    let particles = [];
+
+    function resizeDopCanvas() {
+        dopCanvas.width = window.innerWidth;
+        dopCanvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeDopCanvas);
+    resizeDopCanvas();
+
+    function updateHUD() {
+        const now = new Date();
+        document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
+        
+        const total = tasks.length;
+        const completed = tasks.filter(t => t.completed).length;
+        const efficiency = total === 0 ? 0 : Math.round((completed / total) * 100);
+        
+        document.getElementById('total-count').innerText = total;
+        document.getElementById('completed-count').innerText = completed;
+        document.getElementById('efficiency').innerText = efficiency + "%";
+
+        if (total > 0 && efficiency === 100) {
+            triggerVictory();
+        } else {
+            victoryOverlay.style.display = 'none';
+        }
+    }
+
+    // --- DOPAMINE ENGINE ---
+    function triggerDopamine(x, y, power = 30) {
+        // Audio Synth
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+
+        // Visual Particles
+        for (let i = 0; i < power; i++) {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 15,
+                vy: (Math.random() - 0.5) * 15,
+                life: 1.0,
+                color: Math.random() > 0.5 ? '#00f3ff' : '#ffffff',
+                size: Math.random() * 4 + 2
+            });
+        }
+    }
+
+    function triggerVictory() {
+        if (victoryOverlay.style.display === 'flex') return;
+        victoryOverlay.style.display = 'flex';
+        for (let i = 0; i < 5; i++) {
+            setTimeout(() => {
+                triggerDopamine(Math.random() * window.innerWidth, Math.random() * window.innerHeight, 50);
+            }, i * 200);
+        }
+    }
+
+    function drawParticles() {
+        dopCtx.clearRect(0, 0, dopCanvas.width, dopCanvas.height);
+        particles = particles.filter(p => p.life > 0);
+        particles.forEach(p => {
+            dopCtx.globalAlpha = p.life;
+            dopCtx.fillStyle = p.color;
+            dopCtx.beginPath();
+            dopCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            dopCtx.fill();
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.02;
+        });
+        requestAnimationFrame(drawParticles);
+    }
+    drawParticles();
+
+    function saveTasks() {
+        localStorage.setItem('xelcore_tasks', JSON.stringify(tasks));
+        renderTasks();
+        updateHUD();
+    }
+
+    function renderTasks() {
+        taskList.innerHTML = "";
+        tasks.forEach(task => {
+            const div = document.createElement('div');
+            div.className = `task-item ${task.completed ? 'completed' : ''}`;
+            div.dataset.id = task.id;
+            div.innerHTML = `
+                <div class="task-text">${task.text}</div>
+                <div class="task-actions">
+                    <div class="action-box check" data-action="toggle">${task.completed ? '✓' : '○'}</div>
+                    <div class="action-box delete" data-action="delete">×</div>
+                </div>
+            `;
+            taskList.appendChild(div);
+        });
+    }
+
+    // --- INTEGRACIÓN NEURAL ---
+    let handData = { x: 0, y: 0, isFist: false, active: false };
+    let smoothHand = { x: window.innerWidth/2, y: window.innerHeight/2 };
+    const LERP = 0.15;
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+
+    hands.onResults((results) => {
+        const linkStatus = document.getElementById('link-status');
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            handData.active = true;
+            const hand = results.multiHandLandmarks[0];
+            handData.x = (1 - hand[9].x) * window.innerWidth;
+            handData.y = hand[9].y * window.innerHeight;
+
+            const tips = [hand[8], hand[12], hand[16], hand[20]];
+            const dist = tips.reduce((acc, tip) => acc + Math.hypot(tip.x - hand[0].x, tip.y - hand[0].y), 0) / 4;
+            handData.isFist = dist < 0.22;
+            
+            linkStatus.innerText = "CONNECTED";
+            linkStatus.style.color = "var(--cyan)";
+        } else {
+            handData.active = false;
+            linkStatus.innerText = "OFFLINE";
+        }
+    });
+
+    new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 640, height: 480
+    }).start();
+
+    let lastFistState = false;
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (handData.active) {
+            smoothHand.x += (handData.x - smoothHand.x) * LERP;
+            smoothHand.y += (handData.y - smoothHand.y) * LERP;
+
+            reticle.style.left = `${smoothHand.x}px`;
+            reticle.style.top = `${smoothHand.y}px`;
+            reticle.className = handData.isFist ? 'fist' : '';
+
+            const items = document.querySelectorAll('.task-item, .add-btn, #task-input');
+            items.forEach(el => el.classList.remove('hovered'));
+
+            const elementsUnderReticle = document.elementsFromPoint(smoothHand.x, smoothHand.y);
+            const targetAction = elementsUnderReticle.find(el => el.classList.contains('action-box') || el.classList.contains('add-btn') || el.id === 'task-input');
+            const targetItem = elementsUnderReticle.find(el => el.classList.contains('task-item'));
+
+            if (targetItem) targetItem.classList.add('hovered');
+
+            if (handData.isFist && !lastFistState) {
+                if (targetAction) {
+                    if (targetAction.id === 'add-task-trigger') {
+                        addNewTask();
+                        triggerDopamine(smoothHand.x, smoothHand.y, 15);
+                    } else if (targetAction.dataset.action === 'toggle') {
+                        const id = parseInt(targetItem.dataset.id);
+                        const task = tasks.find(t => t.id === id);
+                        task.completed = !task.completed;
+                        if (task.completed) triggerDopamine(smoothHand.x, smoothHand.y, 40);
+                        saveTasks();
+                    } else if (targetAction.dataset.action === 'delete') {
+                        const id = parseInt(targetItem.dataset.id);
+                        tasks = tasks.filter(t => t.id !== id);
+                        saveTasks();
+                    }
+                } else if (targetItem && !targetAction) {
+                    const id = parseInt(targetItem.dataset.id);
+                    const task = tasks.find(t => t.id === id);
+                    task.completed = !task.completed;
+                    if (task.completed) triggerDopamine(smoothHand.x, smoothHand.y, 40);
+                    saveTasks();
+                } else if (elementsUnderReticle.find(el => el.id === 'task-input')) {
+                    taskInput.focus();
+                }
+                lastFistState = true;
+            }
+
+            if (!handData.isFist) lastFistState = false;
+        }
+    }
+
+    function addNewTask() {
+        const val = taskInput.value.trim();
+        if (val) {
+            tasks.unshift({ id: Date.now(), text: val.toUpperCase(), completed: false });
+            taskInput.value = "";
+            saveTasks();
+        }
+    }
+
+    taskInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            addNewTask();
+            triggerDopamine(window.innerWidth/2, window.innerHeight/2, 10);
+        }
+    });
+
+    document.getElementById('add-task-trigger').addEventListener('click', addNewTask);
+
+    renderTasks();
+    updateHUD();
+    animate();
+    setInterval(updateHUD, 1000);
+
+</script>
+</body>
+</html>

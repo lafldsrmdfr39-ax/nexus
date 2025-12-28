@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XelCore • Mark IX — Lexicon Link</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        :root { --cyan: #00f3ff; --red: #ff3c00; --bg: #020205; --key-bg: rgba(0, 243, 255, 0.05); }
+        body { margin: 0; overflow: hidden; background: var(--bg); font-family: 'Segoe UI', sans-serif; cursor: none; color: white; }
+        
+        /* HUD Superior */
+        #hud-header {
+            position: absolute; top: 0; width: 100%; padding: 20px 40px;
+            display: flex; flex-direction: column; align-items: center;
+            z-index: 10; pointer-events: none; box-sizing: border-box;
+        }
+
+        .search-bar {
+            width: 80%; max-width: 800px; height: 60px;
+            border: 2px solid var(--cyan); background: rgba(0,0,0,0.8);
+            display: flex; align-items: center; padding: 0 20px;
+            font-size: 1.5rem; color: var(--cyan); letter-spacing: 2px;
+            box-shadow: 0 0 20px rgba(0, 243, 255, 0.2);
+            margin-bottom: 10px; text-transform: uppercase;
+        }
+
+        .search-bar span { border-right: 3px solid var(--cyan); padding-right: 5px; animation: blink 1s infinite; }
+        @keyframes blink { 50% { border-color: transparent; } }
+
+        /* Teclado Virtual */
+        #keyboard-container {
+            position: absolute; bottom: 50px; left: 50%;
+            transform: translateX(-50%); width: 90%; max-width: 1000px;
+            display: grid; grid-template-rows: repeat(4, 1fr); gap: 10px;
+            z-index: 5;
+        }
+
+        .key-row { display: flex; justify-content: center; gap: 8px; width: 100%; }
+
+        .key {
+            flex: 1; height: 65px; border: 1px solid var(--cyan);
+            background: var(--key-bg); display: flex; align-items: center;
+            justify-content: center; font-weight: 900; font-size: 1.2rem;
+            color: var(--cyan); transition: all 0.1s; position: relative;
+            text-transform: uppercase; overflow: hidden;
+        }
+
+        .key.active-hover { background: rgba(0, 243, 255, 0.2); border-width: 2px; transform: scale(1.05); box-shadow: 0 0 15px var(--cyan); }
+        .key.active-press { background: var(--red); color: white; border-color: var(--red); transform: scale(0.95); box-shadow: 0 0 25px var(--red); }
+        .key.toggle-on { background: rgba(0, 243, 255, 0.4); box-shadow: inset 0 0 10px var(--cyan); }
+        .key.key-danger { border-color: var(--red); color: var(--red); }
+
+        /* Retícula */
+        #reticle {
+            position: absolute; width: 30px; height: 30px;
+            border: 2px solid var(--cyan); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 100;
+            box-shadow: 0 0 15px var(--cyan);
+            /* Transición suave para eliminar "vibración" visual */
+            transition: width 0.2s, height 0.2s, border-color 0.2s;
+        }
+        #reticle.fist { border-color: var(--red); background: rgba(255, 60, 0, 0.3); width: 45px; height: 45px; }
+
+        video { display: none; }
+        
+        .status-box { position: absolute; left: 40px; top: 20px; color: var(--cyan); font-size: 0.7rem; border-left: 2px solid var(--cyan); padding-left: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="hud-header">
+    <div class="search-bar" id="search-display"><span></span></div>
+    <div style="color: var(--cyan); font-size: 0.8rem; letter-spacing: 2px;">MODO: ENTRADA NEURAL ACTIVA</div>
+</div>
+
+<div class="status-box">
+    XELCORE MK-IX.1<br>
+    TECLADO HOLOGRÁFICO ESTABILIZADO<br>
+    STATUS: ÓPTIMO
+</div>
+
+<div id="reticle"></div>
+
+<div id="keyboard-container">
+    <div class="key-row" id="row-1"></div>
+    <div class="key-row" id="row-2"></div>
+    <div class="key-row" id="row-3"></div>
+    <div class="key-row" id="row-4"></div>
+</div>
+
+<video id="input_video"></video>
+
+<script>
+    /** XELCORE MK-IX.1: LÓGICA DE TECLADO NEURAL ESTABILIZADA **/
+    
+    const layouts = {
+        alpha: [
+            ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+            ["A", "S", "D", "F", "G", "H", "J", "K", "L", "Ñ"],
+            ["MAYUS", "Z", "X", "C", "V", "B", "N", "M", "BORRAR"],
+            ["?123", "ESPACIO", "BUSCAR"]
+        ],
+        symbols: [
+            ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+            ["@", "#", "$", "%", "&", "-", "+", "(", ")", "/"],
+            ["LIMPIAR TODO", "*", "!", "?", ",", ".", ":", "BORRAR"],
+            ["ABC", "ESPACIO", "BUSCAR"]
+        ]
+    };
+
+    let currentInput = "";
+    let isUpperCase = true;
+    let currentLayout = "alpha";
+    
+    const searchDisplay = document.querySelector("#search-display span");
+    const reticle = document.getElementById('reticle');
+    const videoElement = document.getElementById('input_video');
+    const keyboardContainer = document.getElementById('keyboard-container');
+
+    function renderKeyboard() {
+        document.querySelectorAll('.key-row').forEach(row => row.innerHTML = "");
+        const currentRows = layouts[currentLayout];
+        
+        currentRows.forEach((row, rowIndex) => {
+            const rowEl = document.getElementById(`row-${rowIndex + 1}`);
+            row.forEach(keyText => {
+                const key = document.createElement('div');
+                key.className = 'key';
+                let displayVal = keyText;
+                if (currentLayout === "alpha" && keyText.length === 1) {
+                    displayVal = isUpperCase ? keyText.toUpperCase() : keyText.toLowerCase();
+                }
+                
+                key.innerText = displayVal;
+                key.dataset.val = keyText;
+                
+                if (keyText === "ESPACIO") key.style.flex = "4";
+                if (keyText === "BUSCAR" || keyText === "?123" || keyText === "ABC") key.style.flex = "2";
+                if (keyText === "LIMPIAR TODO") { key.style.flex = "2.5"; key.classList.add('key-danger'); }
+                if (keyText === "MAYUS" && isUpperCase) key.classList.add('toggle-on');
+                
+                rowEl.appendChild(key);
+            });
+        });
+    }
+
+    renderKeyboard();
+
+    // --- ESTABILIZACIÓN Y SEGUIMIENTO ---
+    let handData = { x: 0, y: 0, isFist: false, active: false };
+    // Reducimos el jitter aumentando la inercia (Smoothness)
+    let smoothHand = { x: window.innerWidth/2, y: window.innerHeight/2 };
+    const LERP_FACTOR = 0.12; // Menor valor = más suave, mayor valor = más rápido/vibrante
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+
+    hands.onResults((results) => {
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            handData.active = true;
+            const hand = results.multiHandLandmarks[0];
+            handData.x = (1 - hand[9].x) * window.innerWidth;
+            handData.y = hand[9].y * window.innerHeight;
+
+            const tips = [hand[8], hand[12], hand[16], hand[20]];
+            const dist = tips.reduce((acc, tip) => acc + Math.hypot(tip.x - hand[0].x, tip.y - hand[0].y), 0) / 4;
+            handData.isFist = dist < 0.22;
+        } else {
+            handData.active = false;
+        }
+    });
+
+    const camUtils = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 640, height: 480
+    });
+    camUtils.start();
+
+    // --- LÓGICA DE ENTRADA Y TIEMPOS ---
+    let lastFistState = false;
+    let fistStartTime = 0;
+    let longPressActive = false;
+    let longPressInterval = null;
+
+    function handleInput(val) {
+        if (val === "BORRAR") {
+            currentInput = currentInput.slice(0, -1);
+        } else if (val === "LIMPIAR TODO") {
+            currentInput = "";
+        } else if (val === "ESPACIO") {
+            currentInput += " ";
+        } else if (val === "BUSCAR") {
+            if (currentInput.trim() !== "") {
+                window.open(`https://www.google.com/search?q=${encodeURIComponent(currentInput)}`, '_blank');
+            }
+        } else if (val === "MAYUS") {
+            isUpperCase = !isUpperCase;
+            renderKeyboard();
+            return;
+        } else if (val === "?123") {
+            currentLayout = "symbols";
+            renderKeyboard();
+            return;
+        } else if (val === "ABC") {
+            currentLayout = "alpha";
+            renderKeyboard();
+            return;
+        } else {
+            currentInput += (currentLayout === "alpha" && val.length === 1) 
+                ? (isUpperCase ? val.toUpperCase() : val.toLowerCase()) 
+                : val;
+        }
+        searchDisplay.innerText = currentInput;
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (handData.active) {
+            // Aplicar suavizado LERP para eliminar vibración
+            smoothHand.x += (handData.x - smoothHand.x) * LERP_FACTOR;
+            smoothHand.y += (handData.y - smoothHand.y) * LERP_FACTOR;
+
+            reticle.style.left = `${smoothHand.x}px`;
+            reticle.style.top = `${smoothHand.y}px`;
+            reticle.className = handData.isFist ? 'fist' : '';
+
+            let hoveredKey = null;
+            const allKeys = document.querySelectorAll('.key');
+            allKeys.forEach(key => {
+                const rect = key.getBoundingClientRect();
+                if (smoothHand.x > rect.left && smoothHand.x < rect.right &&
+                    smoothHand.y > rect.top && smoothHand.y < rect.bottom) {
+                    key.classList.add('active-hover');
+                    hoveredKey = key;
+                } else {
+                    key.classList.remove('active-hover');
+                }
+            });
+
+            // Manejo de pulsación y Long Press
+            if (handData.isFist) {
+                if (!lastFistState) {
+                    // Inicio de pulsación
+                    fistStartTime = Date.now();
+                    if (hoveredKey) {
+                        hoveredKey.classList.add('active-press');
+                        handleInput(hoveredKey.dataset.val);
+                    }
+                } else {
+                    // Manteniendo puño cerrado
+                    const duration = Date.now() - fistStartTime;
+                    
+                    if (duration > 1500 && hoveredKey && hoveredKey.dataset.val === "BORRAR" && !longPressActive) {
+                        longPressActive = true;
+                        longPressInterval = setInterval(() => {
+                            handleInput("BORRAR");
+                        }, 100); // Velocidad de borrado continuo
+                    }
+                }
+                lastFistState = true;
+            } else {
+                // Puño abierto: Limpiar estados
+                if (longPressActive) {
+                    clearInterval(longPressInterval);
+                    longPressActive = false;
+                }
+                lastFistState = false;
+                document.querySelectorAll('.key.active-press').forEach(k => k.classList.remove('active-press'));
+            }
+        }
+    }
+
+    animate();
+</script>
+</body>
+</html>
